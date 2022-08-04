@@ -1,0 +1,341 @@
+---
+title: "Severe Weather Event Impact Analysis"
+author: "Jennie Bain"
+date: '2022-08-03'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Top 10 Most Harmful Weather Events for Population Health and Economic Impact
+
+### Synopsis
+
+In this analysis we will evaluate which severe weather events are most harmful with respect to population health and which severe weather events have the greatest economic consequences. To do this, [storm data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) from the National Weather Service for 1950 through the end of November 2011 was used. Weather events were categorized based on the event types listed in the data and condensed to match as closely as possible to the event types given in the [documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf). Impacts on population health were evaluated based on both the combined number of injuries and fatalities for each event type, and the number of injuries and fatalities separately. Economic impacts were evaluated based the combined value of crop and property damage for each event type. It was found that tornadoes cause the greatest harm to population health and floods cause the greatest economic consequences.  
+
+
+### Data Processing
+
+To begin this analysis, the necessary libraries were loaded and [storm data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) was downloaded and read into a variable.
+
+```{r, loadlibraries, message = FALSE}
+library(tidyr)
+library(stringr)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r loaddata}
+if(!file.exists("weatherData.bz2")){
+  fileUrl <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+  download.file(fileUrl,destfile = "./weatherData.bz2",method="curl")}
+
+weather <- read.csv("weatherData.bz2")
+```
+
+Then a new startDate variable was created with the values from BGN_DATE converted to a date field.
+
+```{r startdate}
+weather$startDate <- as.Date(weather$BGN_DATE,"%m/%d/%Y")
+```
+
+The data was then inspected to ensure it was properly formatted.
+
+```{r inspectdate}
+head(weather)
+```
+
+Since more data was recorded in recent years than at the start of data collection, the data was then examined to determine the most useful range of dates to consider. This was done by examining which weather event types were reported each year and then generating a table with a count of distinct weather event types by year. 
+
+```{r, eventtypes, message=FALSE}
+weather %>%
+  mutate(year = format(startDate, "%Y")) %>%
+  group_by(year, EVTYPE) %>%
+  summarise(count=n()) -> weatherTypes
+```
+
+```{r, viewtypes, eval=FALSE}
+View(weatherTypes)
+```
+
+```{r, yearcounts}
+weatherTypes %>%
+  group_by(year) %>%
+  summarise(count=n()) -> yearCounts
+```
+
+```{r, viewyears, eval=FALSE}
+View(yearCounts)
+```
+
+From here we can see that the number of event types reported jumped considerably in 1993, so it was decided to use all data starting from 1993. (Note: The data shown below is a subset of the table viewed in the analysis, the entire table is not shown due to space requirements.)
+
+```{r yearsinclude}
+yearCounts[40:50,]
+```
+
+The data was then filtered to only include data starting from 1993 and stored in a new variable to make rerunning the analysis from the beginning possible without having to reload the data from the file. 
+
+```{r subsetyear}
+wd <- subset(weather, startDate >= "1993-01-01")
+```
+
+Since we are evaluating impacts on population health and economic consequences, we will only consider data where one of the following is greater than 0: injuries, fatalities, crop damage amount, property damage amount. Everything else will be removed.
+
+```{r subsetdata}
+wd <- subset(wd, FATALITIES > 0 | INJURIES > 0 | CROPDMG > 0 | PROPDMG > 0)
+```
+
+The unique event types were then inspected to determine what cleaning would need to be done to those. The goal was to match the weather events as closely as possible to the weather events listed in the [documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf). (Data not shown here due to size.)
+
+```{r inspectevents, eval=FALSE}
+unique(sort(wd$EVTYPE))
+```
+
+The first steps for cleaning the event types were to set all types to uppercase for ease of comparison and strip extra white space at the beginning and end of the field and extra internal spaces, 
+
+```{r cleanstep1}
+wd$EVTYPE <- toupper(wd$EVTYPE)
+wd$EVTYPE <- trimws(wd$EVTYPE)
+wd$EVTYPE <- str_squish(wd$EVTYPE)
+```
+
+Then another pass was done cleaning up and condensing common weather events into consistent event types.
+
+```{r cleanstep2}
+wd$EVTYPE <- gsub("WINDS","WIND",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*TORN(AD|DA)O.*","TORNADO",wd$EVTYPE)
+wd$EVTYPE <- gsub("LANDSPOUT","TORNADO",wd$EVTYPE)
+wd$EVTYPE <- gsub("TSTMW?","THUNDERSTORM", wd$EVTYPE)
+wd$EVTYPE <- gsub("THU.*WIN.*","THUNDERSTORM WIND",wd$EVTYPE)
+wd$EVTYPE <- gsub("(SEVERE)? ?THUNDERSTORM(S|W)?","THUNDERSTORM",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*HAIL.*","HAIL",wd$EVTYPE)
+wd$EVTYPE <- gsub("^TROPICAL.*","TROPICAL STORM",wd$EVTYPE)
+wd$EVTYPE <- gsub("HURRICANE.*","HURRICANE",wd$EVTYPE)
+wd$EVTYPE <- gsub("TYPHOON.*","HURRICANE",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*LIG.*ING.*","THUNDERSTORM",wd$EVTYPE)
+```
+
+The data was inspected again to determine the next steps (data not shown here due to size).
+
+```{r inspectevents2, eval=FALSE}
+unique(sort(wd$EVTYPE))
+```
+
+An iterative process was then executed to clean up and condense the remaining weather events resulting in the following replacements.
+
+```{r cleanstep3}
+wd$EVTYPE <- gsub("^AVALAN.*","AVALANCHE",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*BLIZZARD.*","BLIZZARD",wd$EVTYPE)
+wd$EVTYPE <- gsub("EROSION/CSTL*","COASTAL FLOOD",wd$EVTYPE)
+wd$EVTYPE <- gsub("^(COASTAL|BEACH).*","COASTAL FLOOD",wd$EVTYPE)
+wd$EVTYPE <- gsub("^COLD.*","COLD/WIND CHILL",wd$EVTYPE)
+wd$EVTYPE <- gsub("(EXTENDED|RECORD) COLD.*","COLD/WIND CHILL",wd$EVTYPE)
+wd$EVTYPE <- gsub("UNSEA.*COLD","COLD/WIND CHILL",wd$EVTYPE)
+wd$EVTYPE <- gsub("(COOL AND WET|LOW TEMPERATURE)","COLD/WIND CHILL",wd$EVTYPE)
+wd$EVTYPE <- gsub("BLOWING DUST.*","DUST STORM",wd$EVTYPE)
+wd$EVTYPE <- gsub("DUST STORM.*","DUST STORM",wd$EVTYPE)
+wd$EVTYPE <- gsub("WHIRLWIND.*","DUST DEVIL",wd$EVTYPE)
+wd$EVTYPE <- gsub("DUST DEVIL.*","DUST DEVIL",wd$EVTYPE)
+wd$EVTYPE <- gsub("DROUGHT.*","DROUGHT",wd$EVTYPE)
+wd$EVTYPE <- gsub("EXTREME.*","EXTREME COLD/WIND CHILL",wd$EVTYPE)
+wd$EVTYPE <- gsub("^HYPOTH.*","EXTREME COLD/WIND CHILL",wd$EVTYPE)
+wd$EVTYPE <- gsub("(URBAN|DAM|RURAL|SMALL STREAM).*","FLOOD",wd$EVTYPE)
+wd$EVTYPE <- gsub("^FLOOD.*","FLOOD",wd$EVTYPE)
+wd$EVTYPE <- gsub("(RIVER|BREAKUP|LAKE|LAKESHORE|MAJOR|MINOR|NON-SEVERE|THUNDERSTORM).* FLOOD.*","FLOOD",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*FLASH.*","FLASH FLOOD",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*ICE (JAM|FLOES).*","FLASH FLOOD",wd$EVTYPE)
+wd$EVTYPE <- gsub("RAPIDLY RISING WATER","FLASH FLOOD",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*FREEZE$","FROST/FREEZE",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*FROST.*","FROST/FREEZE",wd$EVTYPE)
+wd$EVTYPE <- gsub("^FOG.*","FOG",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*WARM.*","HEAT",wd$EVTYPE)
+wd$EVTYPE <- gsub("HEAT WAVE.*","HEAT",wd$EVTYPE)
+wd$EVTYPE <- gsub("RECORD.*HEAT.*","HEAT",wd$EVTYPE)
+wd$EVTYPE <- gsub("^HYPERTH.*","HEAT",wd$EVTYPE)
+wd$EVTYPE <- gsub("(UNSEASONAL|EXCESSIVE|TORRENTIAL|RECORD|H(EA)?VY) (RAIN|WET|PRECIPITATION|SHOWER).*","HEAVY RAIN",wd$EVTYPE)
+wd$EVTYPE <- gsub("HEAVY SNOW.*","HEAVY SNOW",wd$EVTYPE)
+wd$EVTYPE <- gsub("(EXCESSIVE|RECORD|LATE SEASON) SNOW.*","HEAVY SNOW",wd$EVTYPE)
+wd$EVTYPE <- gsub("SNOW SQUALL.*","HEAVY SNOW",wd$EVTYPE)
+wd$EVTYPE <- gsub("THUNDERSNOW.*","HEAVY SNOW",wd$EVTYPE)
+wd$EVTYPE <- gsub("HEAVY LAKE SNOW","HEAVY SNOW",wd$EVTYPE)
+wd$EVTYPE <- gsub("HEAVY SURF.*","HIGH SURF",wd$EVTYPE)
+wd$EVTYPE <- gsub("HIGH (SEAS|TIDES).*","HIGH SURF",wd$EVTYPE)
+wd$EVTYPE <- gsub("HEAVY SEAS.*","HIGH SURF",wd$EVTYPE)
+wd$EVTYPE <- gsub("(HIGH|HEAVY) SWELLS.*","HIGH SURF",wd$EVTYPE)
+wd$EVTYPE <- gsub("^ROUGH.*","HIGH SURF",wd$EVTYPE)
+wd$EVTYPE <- gsub("HAZARDOUS SURF.*","HIGH SURF",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*HIGH SURF.*","HIGH SURF",wd$EVTYPE)
+wd$EVTYPE <- gsub("HIGH (WATER|WAVES).*","HIGH SURF",wd$EVTYPE)
+wd$EVTYPE <- gsub("TIDAL FLOODING","HIGH SURF",wd$EVTYPE)
+wd$EVTYPE <- gsub("(GUSTY|GRADIENT) WIND.*","HIGH WIND",wd$EVTYPE)
+wd$EVTYPE <- gsub("HIGH WIND.*","HIGH WIND",wd$EVTYPE)
+wd$EVTYPE <- gsub("IC.*ROAD.*","ICE STORM",wd$EVTYPE)
+wd$EVTYPE <- gsub("^IC(E|Y).*","ICE STORM",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*SLIDE.*","DEBRIS FLOW",wd$EVTYPE)
+wd$EVTYPE <- gsub("(APACHE COUNTY|\\?)","OTHER",wd$EVTYPE)
+wd$EVTYPE <- gsub("^RAIN.*","RAIN",wd$EVTYPE)
+wd$EVTYPE <- gsub("RIP CURRENT.*","RIP CURRENT",wd$EVTYPE)
+wd$EVTYPE <- gsub("^SLEET.*","SLEET",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*(SURGE|ROGUE).*","STORM SURGE/TIDE",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*(BURST|GUSTNADO).*","THUNDERSTORM WIND",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*STORM.*WIND","THUNDERSTORM WIND",wd$EVTYPE)
+wd$EVTYPE <- gsub("NON-SEVERE WIND DAMAGE.*","STRONG WIND",wd$EVTYPE)
+wd$EVTYPE <- gsub("NON( |-)THUNDERSTORM WIND.*","STRONG WIND",wd$EVTYPE)
+wd$EVTYPE <- gsub("^WIND .*","STRONG WIND",wd$EVTYPE)
+wd$EVTYPE <- gsub("WATERSPOUT.*","WATERSPOUT",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*FIRE.*","WILDFIRE",wd$EVTYPE)
+wd$EVTYPE <- gsub("RAIN/SNOW.*","WINTER WEATHER",wd$EVTYPE)
+wd$EVTYPE <- gsub("MIXED PRECIP.*","WINTER WEATHER",wd$EVTYPE)
+wd$EVTYPE <- gsub("FALLING SNOW/ICE.*","WINTER WEATHER",wd$EVTYPE)
+wd$EVTYPE <- gsub("FREEZING DRIZZLE.*","WINTER WEATHER",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*WINTER WEATHER.*","WINTER WEATHER",wd$EVTYPE)
+wd$EVTYPE <- gsub("GLAZE.*","WINTER WEATHER",wd$EVTYPE)
+wd$EVTYPE <- gsub(".*FREEZING RAIN.*","WINTER WEATHER",wd$EVTYPE)
+wd$EVTYPE <- gsub("LIGHT SNOW.*","WINTER WEATHER",wd$EVTYPE)
+wd$EVTYPE <- gsub("BLOWING SNOW.*","WINTER WEATHER",wd$EVTYPE)
+wd$EVTYPE <- gsub("^SNOW.*","WINTER WEATHER",wd$EVTYPE)
+wd$EVTYPE <- gsub("(WINTRY|HEAVY) MIX.*","WINTER WEATHER",wd$EVTYPE)
+wd$EVTYPE <- gsub("WINTER STORM.*","WINTER STORM",wd$EVTYPE)
+wd$EVTYPE <- gsub("^RAIN$","HEAVY RAIN",wd$EVTYPE)
+wd$EVTYPE <- gsub("^WIND$","HIGH WIND",wd$EVTYPE)
+```
+
+This left the final event types used as follows.
+
+```{r inspectevents3}
+unique(sort(wd$EVTYPE))
+```
+
+From there we were able to analyze the data.
+
+### Results
+
+#### Across the United States, which types of events are most harmful with respect to population health?
+
+To consider this question, we first created a new variable as a subset of the data containing only records where either injuries or fatalities were greater than 0.
+
+```{r subsethealth}
+wd_inj <- subset(wd,FATALITIES > 0 | INJURIES > 0)
+```
+
+We then summarized this data to find the total number of injuries and fatalities by event type.
+
+```{r summarizetype}
+wd_inj %>%
+  group_by(EVTYPE) %>%
+  summarize(injuries=sum(INJURIES),deaths=sum(FATALITIES)) -> injuries
+```
+
+Then the top 10 events that caused the greatest number of combined injuries and fatalities were found and graphed.
+
+```{r toptenhealthplot}
+wd_inj %>%
+  group_by(EVTYPE) %>%
+  summarize(injuries=sum(INJURIES),deaths=sum(FATALITIES),totalPeople=sum(INJURIES,FATALITIES)) %>%
+  arrange(desc(totalPeople)) %>%
+  slice(1:10) -> people
+
+people_long <- pivot_longer(people,-c(EVTYPE,totalPeople),names_to="damageType",values_to="value")
+
+people_long %>%
+  group_by(EVTYPE,damageType) %>%
+  summarize(sum=sum(value)) %>%
+  ggplot(aes(x=EVTYPE,y=sum,fill=damageType)) + geom_bar(stat="identity") + 
+  labs(title="Top 10 Weather Events by Harm to Population Health", x="Weather Type",y="Number of People Injured or Killed", fill="Damage Type") + 
+  theme(axis.text.x = element_text(angle=60,vjust=1,hjust=1)) +
+  scale_fill_manual(labels=c('Fatalities','Injuries'),values=c("light blue","#0072B2"))
+```
+
+This shows that the tornadoes cause the most injuries and fatalities combined, followed by excessive heat then floods.
+
+It is important to remember, though, that injuries are much more common than fatalities and the events causing the most fatalities are not necessarily the same as those causing the most injuries. To consider this, the 10 event types with the greatest number of injuries and the 10 event types with the greatest number of fatalities were found and stored in a new table.
+
+```{r toptenhealth}
+injuries %>%
+  arrange(desc(injuries)) %>%
+  slice(1:10) -> inj_top
+
+injuries %>%
+  arrange(desc(deaths)) %>%
+  slice(1:10)  -> death_top
+
+top_health <- data.frame(inj_top$EVTYPE,death_top$EVTYPE)
+colnames(top_health) <- c("Injuries","Fatalities")
+```
+```{r tophealthtable}
+knitr::kable(top_health, caption="Top 10 Causes of Injuries and Fatalities")
+```
+
+It was found that while there is a great deal of overlap between events that cause the most injuries and those that cause the most deaths, there were some differences. In particular, while rip currents and extreme cold/wind chill do not cause many injuries, they do top the list of events causing fatalities. When considering how to address different events, it may be necessary to take into account those events that cause a greater proportion of fatalities, even if they do not top the list of events causing injuries. 
+
+#### Across the United States, which types of events have the greatest economic consequences?
+
+A similar analysis was performed to evaluate economic consequences. First, a new variable was created with only the records where either crop or property damage was reported. 
+
+```{r subsetdamage}
+wd_dmg <- subset(wd,CROPDMG > 0 | PROPDMG > 0)
+```
+
+Damage values were reported as an amount and an exponent (a letter, number or +/-/?). First, the data was inspected to ensure there were no unexpected exponent values. Exponent values were changed to upper case for ease of matching. Then amount fields were created for both property damage and crop damage by multiplying the amount field by the appropriate value for the exponent (H = 100; K = 1,000; M = 1,000,000; B = 1,000,000,000; numeric values = 10*exponent; everything else = 1).
+
+```{r calcamount}
+unique(sort(wd_dmg$CROPDMGEXP))
+unique(sort(wd_dmg$PROPDMGEXP))
+
+wd_dmg$CROPDMGEXP <- toupper(wd_dmg$CROPDMGEXP)
+wd_dmg$PROPDMGEXP <- toupper(wd_dmg$PROPDMGEXP)
+
+wd_dmg %>%
+  mutate(cropDmgAmt = case_when(
+    CROPDMGEXP == 'K' ~ CROPDMG * 1000,
+    CROPDMGEXP == 'M' ~ CROPDMG * 1000000,
+    CROPDMGEXP == 'B' ~ CROPDMG * 1000000000,
+    CROPDMGEXP == '0' ~ CROPDMG,
+    CROPDMG > 0 ~ CROPDMG,
+    TRUE ~ 0)) -> wd_dmg
+
+
+wd_dmg %>%
+  mutate(propDmgAmt = case_when(
+    PROPDMGEXP == 'H' ~ PROPDMG * 100,
+    PROPDMGEXP == 'K' ~ PROPDMG * 1000,
+    PROPDMGEXP == 'M' ~ PROPDMG * 1000000,
+    PROPDMGEXP == 'B' ~ PROPDMG * 1000000000,
+    PROPDMGEXP == '0' ~ PROPDMG,
+    PROPDMGEXP == '+' ~ PROPDMG,
+    PROPDMGEXP == '-' ~ PROPDMG,
+    PROPDMGEXP == '2' ~ PROPDMG * 100,
+    PROPDMGEXP == '3' ~ PROPDMG * 1000,
+    PROPDMGEXP == '4' ~ PROPDMG * 10000,
+    PROPDMGEXP == '5' ~ PROPDMG * 100000,
+    PROPDMGEXP == '6' ~ PROPDMG * 1000000,
+    PROPDMGEXP == '7' ~ PROPDMG * 10000000,
+    PROPDMG > 0 ~ PROPDMG,
+    TRUE ~ 0)) -> wd_dmg
+```
+
+Then property and crop damage values were added together and the top 10 events were plotted.
+
+```{r damageplot}
+wd_dmg %>%
+  group_by(EVTYPE) %>%
+  summarize(cropDamage=sum(cropDmgAmt),propDamage=sum(propDmgAmt),totalDamage=sum(cropDmgAmt,propDmgAmt)) %>%
+  arrange(desc(totalDamage)) %>%
+  slice(1:10) -> damage
+
+damage_long <- pivot_longer(damage,-c(EVTYPE,totalDamage),names_to="damageType",values_to="value")
+
+
+damage_long %>%
+  group_by(EVTYPE,damageType) %>%
+  summarize(sum=sum(value)) %>%
+  ggplot(aes(x=EVTYPE,y=sum,fill=damageType)) + geom_bar(stat="identity") + 
+  labs(title="Top 10 Weather Events by $ Value of Damage Caused", x="Weather Type",y="$ Amount of Damage Caused", fill="Damage Type") + 
+  theme(axis.text.x = element_text(angle=60,vjust=1,hjust=1)) +
+  scale_fill_manual(labels=c('Crop Damage','Property Damage'),values=c("light blue","#0072B2"))
+```
+
+It was found that floods cause the highest value of damage, followed by hurricanes and storm surges/tides. For the top 10 events, only droughts caused more crop damage than property damage. 
